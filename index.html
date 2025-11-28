@@ -217,6 +217,11 @@
             background: #c6f6d5;
             color: #2f855a;
         }
+        
+        .message.warning {
+            background: #feebc8;
+            color: #c05621;
+        }
     </style>
 </head>
 <body>
@@ -248,25 +253,67 @@
         // 請替換成你的 Google Apps Script 網頁應用程式 URL
         const SCRIPT_URL = 'https://script.google.com/macros/s/AKfycbxyKWGGkuQZ4VuKa3-fgrsbGIppEJGheCcoaSlQpg74VDcGnbQ0s0LgbCyFsB3FhFaz/exec';
         
+        // 通用 API 請求函數（使用 text/plain 避免 CORS）
+        async function callAPI(action, data = {}) {
+            try {
+                const payload = {
+                    action: action,行動：行動，
+                    ...data
+                };
+                
+                const response = await fetch(SCRIPT_URL, {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'text/plain;charset=utf-8'  // 關鍵：避免 CORS 預檢
+                    },
+                    body: JSON.stringify(payload),
+                    redirect: 'follow'
+                });
+                
+                // 檢查 HTTP 狀態碼
+                if (!response.ok) {
+                    throw new Error(`HTTP Error: ${response.status} ${response.statusText}`);
+                }
+                
+                const result = await response.json();
+                
+                // 檢查業務邏輯錯誤
+                if (result.status === 'error') {
+                    throw new Error(result.message || '未知錯誤');
+                }
+                
+                return result;
+                
+            } catch (error) {
+                console.error('API Error:', error);
+                
+                // 區分錯誤類型
+                if (error.message.includes('HTTP Error')) {
+                    throw new Error('伺服器錯誤，請稍後再試');
+                } else if (error.message.includes('Failed to fetch')) {
+                    throw new Error('網路連線失敗，請檢查網路');
+                } else {
+                    throw error;
+                }
+            }
+        }
+        
         // 載入所有待辦事項
         async function loadTodos() {
             const todoList = document.getElementById('todoList');
             todoList.innerHTML = '<div class="loading"><div class="spinner"></div><p>載入中...</p></div>';
             
             try {
-                const response = await fetch(`${SCRIPT_URL}?action=getTodos`);
-                const data = await response.json();
-                
-                if (data.status === 'success') {
-                    displayTodos(data.todos);
-                } else {
-                    showMessage('載入失敗：' + data.message, 'error');
-                    todoList.innerHTML = '<div class="empty-state"><p>載入失敗</p></div>';
-                }
+                const data = await callAPI('getTodos');
+                displayTodos(data.todos || []);
             } catch (error) {
-                console.error('Error:', error);
-                showMessage('連線錯誤：' + error.message, 'error');
-                todoList.innerHTML = '<div class="empty-state"><p>連線錯誤</p></div>';
+                showMessage('載入失敗：' + error.message, 'error');
+                todoList.innerHTML = `
+                    <div class="empty-state">
+                        <p style="color: #e53e3e;">⚠️ 載入失敗</p>
+                        <p style="font-size: 14px; margin-top: 8px;">${error.message}</p>
+                    </div>
+                `;
             }
         }
         
@@ -306,63 +353,31 @@
             const text = input.value.trim();
             
             if (!text) {
-                showMessage('請輸入待辦事項內容', 'error');
+                showMessage('請輸入待辦事項內容', 'warning');
                 return;
             }
             
             try {
-                const response = await fetch(SCRIPT_URL, {
-                    method: 'POST',
-                    headers: {
-                        'Content-Type': 'application/json',
-                    },
-                    body: JSON.stringify({
-                        action: 'addTodo',
-                        text: text
-                    })
-                });
-                
-                const data = await response.json();
-                
-                if (data.status === 'success') {
-                    input.value = '';
-                    showMessage('新增成功！', 'success');
-                    loadTodos();
-                } else {
-                    showMessage('新增失敗：' + data.message, 'error');
-                }
+                await callAPI('addTodo', { text: text });
+                input.value = '';
+                showMessage('✅ 新增成功！', 'success');
+                loadTodos();
             } catch (error) {
-                console.error('Error:', error);
-                showMessage('連線錯誤：' + error.message, 'error');
+                showMessage('❌ 新增失敗：' + error.message, 'error');
             }
         }
         
         // 切換完成狀態
         async function toggleTodo(id, completed) {
             try {
-                const response = await fetch(SCRIPT_URL, {
-                    method: 'POST',
-                    headers: {
-                        'Content-Type': 'application/json',
-                    },
-                    body: JSON.stringify({
-                        action: 'toggleTodo',
-                        id: id,
-                        completed: completed
-                    })
+                await callAPI('toggleTodo', { 
+                    id: id, 
+                    completed: completed 
                 });
-                
-                const data = await response.json();
-                
-                if (data.status === 'success') {
-                    loadTodos();
-                } else {
-                    showMessage('更新失敗：' + data.message, 'error');
-                    loadTodos();
-                }
+                loadTodos();
             } catch (error) {
-                console.error('Error:', error);
-                showMessage('連線錯誤：' + error.message, 'error');
+                showMessage('❌ 更新失敗：' + error.message, 'error');
+                loadTodos(); // 重新載入以恢復原狀
             }
         }
         
@@ -373,28 +388,11 @@
             }
             
             try {
-                const response = await fetch(SCRIPT_URL, {
-                    method: 'POST',
-                    headers: {
-                        'Content-Type': 'application/json',
-                    },
-                    body: JSON.stringify({
-                        action: 'deleteTodo',
-                        id: id
-                    })
-                });
-                
-                const data = await response.json();
-                
-                if (data.status === 'success') {
-                    showMessage('刪除成功！', 'success');
-                    loadTodos();
-                } else {
-                    showMessage('刪除失敗：' + data.message, 'error');
-                }
+                await callAPI('deleteTodo', { id: id });
+                showMessage('✅ 刪除成功！', 'success');
+                loadTodos();
             } catch (error) {
-                console.error('Error:', error);
-                showMessage('連線錯誤：' + error.message, 'error');
+                showMessage('❌ 刪除失敗：' + error.message, 'error');
             }
         }
         
